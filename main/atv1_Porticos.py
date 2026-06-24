@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import os
+from scipy.linalg import eigh
 
 results_dir = "resultados"
 
@@ -145,6 +146,8 @@ class Estrutura():
         self.build()
         self.mapear_nos()
         self.K_global, self.M_global = self.montar_matrizes_globais()
+        self.seis_frequencias_hz = []
+        self.seis_modos_vibracao = []
     
     def build(self):
         self.elementos.append(Portico((0.0, 0.0), (0.0, 1.5), 1))
@@ -264,10 +267,94 @@ class Estrutura():
         plt.title("Perfil de Esparsidade da Matriz M")
         salvar_grafico(plt, results_dir, "Esparsidade_M.png")               
         return K_g, M_g
+    
+    def analise_modal(self):
+        id_no_base1 = self.no_para_id[(0.0, 0.0)]
+        id_no_base2 = self.no_para_id[(1.5, 0.0)]
+
+        gdls_fixos = [
+            3 * id_no_base1, 3 * id_no_base1 + 1, 3 * id_no_base1 + 2,
+            3 * id_no_base2, 3 * id_no_base2 + 1, 3 * id_no_base2 + 2
+        ]
+        
+        num_gdl_total = len(self.nos) * 3
+        gdls_livres = [i for i in range(num_gdl_total) if i not in gdls_fixos]
+        
+        K_restrito = np.delete(self.K_global, gdls_fixos, axis=0)
+        K_restrito = np.delete(K_restrito, gdls_fixos, axis=1)
+        
+        M_restrito = np.delete(self.M_global, gdls_fixos, axis=0)
+        M_restrito = np.delete(M_restrito, gdls_fixos, axis=1)
+        
+        autovalores, autovetores_restritos = eigh(K_restrito, M_restrito)
+        
+        w2_6 = autovalores[:6]
+        frequencias_hz = np.sqrt(w2_6) / (2 * np.pi)
+        
+        modos_globais = np.zeros((num_gdl_total, 6))
+        
+        for idx_livre, gdl_real in enumerate(gdls_livres):
+            modos_globais[gdl_real, :] = autovetores_restritos[idx_livre, :6]
+        
+        self.seis_frequencias_hz = frequencias_hz
+        self.seis_modos_vibracao = modos_globais
+        return frequencias_hz, modos_globais
+
+    def plotar_modos_vibracao(self, fator_escala=0.5):
+        for i in range(6):
+            plt.figure(figsize=(10, 9))
+            
+            u_modo = self.seis_modos_vibracao[:, i]
+            freq_hz = self.seis_frequencias_hz[i]
+            
+            for elem in self.elementos:
+
+                id1 = self.no_para_id[elem.p1]
+                id2 = self.no_para_id[elem.p2]
+                
+                x_orig = [elem.p1[0], elem.p2[0]]
+                y_orig = [elem.p1[1], elem.p2[1]]
+                
+                ux1 = u_modo[3 * id1]
+                uy1 = u_modo[3 * id1 + 1]
+                
+                ux2 = u_modo[3 * id2]
+                uy2 = u_modo[3 * id2 + 1]
+                
+                x_def = [elem.p1[0] + fator_escala * ux1, elem.p2[0] + fator_escala * ux2]
+                y_def = [elem.p1[1] + fator_escala * uy1, elem.p2[1] + fator_escala * uy2]
+                
+                plt.plot(x_orig, y_orig, color="lightgray", linestyle="--", linewidth=1.2)
+                
+                if isinstance(elem, Portico):
+                    plt.plot(x_def, y_def, color="royalblue", linewidth=3.0)
+                elif isinstance(elem, Trelica):
+                    plt.plot(x_def, y_def, color="darkorange", linewidth=1.5)
+                    
+            passo = 1.5
+            plt.xticks(np.arange(0, 6.1, passo))
+            plt.yticks(np.arange(0, 9.1, passo))
+            plt.grid(True, linestyle=":", alpha=0.4)
+            plt.axis("equal")
+            
+            plt.title(f"Modo {i+1} - Frequência Natural: {freq_hz:.2f} Hz", fontsize=13, fontweight="bold")
+            plt.xlabel("X (m)")
+            plt.ylabel("Y (m)")
+            
+            leg_orig = mlines.Line2D([], [], color="lightgray", linestyle="--", label="Não Deformada")
+            leg_port = mlines.Line2D([], [], color="royalblue", linewidth=3.0, label="Pórtico (Deformado)")
+            leg_trel = mlines.Line2D([], [], color="darkorange", linewidth=1.5, label="Treliça (Deformado)")
+            plt.legend(handles=[leg_orig, leg_port, leg_trel], loc="upper right")
+            
+            nome_arquivo = f"modo_{i+1}_{freq_hz:.1f}Hz.png"
+            salvar_grafico(plt, results_dir, nome_arquivo)
 
 def main():
     estrutura = Estrutura()
     #estrutura.plot_estrutura()
+    estrutura.analise_modal()
+    print(estrutura.seis_frequencias_hz)
+    estrutura.plotar_modos_vibracao(fator_escala=3)
 
 if __name__ == "__main__":    
     main()

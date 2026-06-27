@@ -12,6 +12,7 @@ def salvar_grafico(plt, nome_pasta, nome_arquivo):
     caminho_completo = os.path.join(nome_pasta, nome_arquivo)
     plt.savefig(caminho_completo, dpi=300, bbox_inches='tight')
     print(f"-> Gráfico salvo com sucesso em: {caminho_completo}")
+    plt.close()
 
 def salvar_matriz(M, nome_pasta, nome_base="estrutura"):
     os.makedirs(nome_pasta, exist_ok=True)
@@ -19,7 +20,7 @@ def salvar_matriz(M, nome_pasta, nome_base="estrutura"):
     np.savetxt(caminho_txt, M, fmt='%.4e', delimiter='\t')
     print(f"-> Matriz {nome_base} (.txt) salva em: {caminho_txt}")
 
-def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", fator_escala=30, skip_frames=2):
+def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", append = "", fator_escala=30, skip_frames=2):
     """
     Lê os dados salvos do transiente, renderiza a torre a cada instante de tempo
     e compila tudo num arquivo GIF animado com a força móvel sinalizada.
@@ -129,12 +130,12 @@ def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", fator_escal
     )
 
     # 7. Gravação física do arquivo no HD usando o motor Pillow
-    caminho_gif = os.path.join(pasta_dados, "animacao_simulacao.gif")
+    caminho_gif = os.path.join(pasta_dados, f"animacao_simulacao{append}.gif")
     ani.save(caminho_gif, writer='pillow', fps=20)
     
     plt.close() # Libera a figura da memória
     print(f"=======================================================")
-    print(f"🎉 GIF gerado com sucesso em: {caminho_gif}")
+    print(f" GIF gerado com sucesso em: {caminho_gif}")
     print(f"=======================================================")
 
 
@@ -770,13 +771,145 @@ class Estrutura():
         )
         print(f"-> [OK] Arquivo de texto legível salvo em: {caminho_txt}")
 
+    def plotar_movimento_no(self, no_alvo=(1.5, 9.0), pasta_dados=results_dir, append=""):
+        """
+        Carrega os dados salvos e plota o histórico de deslocamento X e Y de um nó específico.
+        """
+        # 1. Carrega os dados salvos pelo Newmark
+        caminho_npz = os.path.join(pasta_dados, "dados_transiente.npz")
+        dados = np.load(caminho_npz)
+        tempo = dados['tempo']
+        hist_u = dados['deslocamentos']
+        
+        # 2. Encontra os GDLs do nó alvo
+        id_no = self.no_para_id[no_alvo]
+        gdl_x = 3 * id_no
+        gdl_y = 3 * id_no + 1
+        
+        # 3. Extrai as linhas de deslocamento (convertendo m para mm)
+        u_x = hist_u[gdl_x, :] * 1000
+        u_y = hist_u[gdl_y, :] * 1000
+        
+        # 4. Plotagem
+        plt.figure(figsize=(10, 5))
+        plt.plot(tempo, u_x, color="royalblue", linewidth=1.5, label="Deslocamento X (Horizontal)")
+        plt.plot(tempo, u_y, color="darkorange", linewidth=1.5, label="Deslocamento Y (Vertical)")
+        
+        plt.title(f"Histórico de Movimento do Nó {no_alvo}", fontsize=12, fontweight="bold")
+        plt.xlabel("Tempo (s)")
+        plt.ylabel("Deslocamento (mm)")
+        plt.grid(True, linestyle=":", alpha=0.6)
+        plt.legend(loc="upper right")
+        salvar_grafico(plt, pasta_dados, f"movimento_no_{no_alvo[0]}_{no_alvo[1]}{append}.png")
+    
+    def plotar_top3_von_mises(self, pasta_dados="resultados_simulacao", skip_steps=5, append=""):
+        """
+        Calcula a história de tensões de Von Mises para todos os elementos,
+        identifica os 3 elementos com maiores picos históricos e plota suas evoluções.
+        """
+        caminho_npz = os.path.join(pasta_dados, "dados_transiente.npz")
+        dados = np.load(caminho_npz)
+        tempo = dados['tempo']
+        hist_u = dados['deslocamentos']
+        
+        num_passos = len(tempo)
+        num_elementos = len(self.elementos)
+        
+        # Matriz para guardar o histórico de Von Mises de cada elemento
+        # Guardaremos apenas os passos amostrados para economizar memória RAM
+        passos_amostrados = np.arange(0, num_passos, skip_steps)
+        tempo_amostrado = tempo[passos_amostrados]
+        historico_vm = np.zeros((num_elementos, len(passos_amostrados)))
+        
+        print("-> Calculando tensões de Von Mises ao longo do tempo...")
+        
+        # Loop temporal amostrado
+        for idx_t, passo in enumerate(passos_amostrados):
+            u_frame = hist_u[:, passo]
+            
+            # Loop por todos os elementos da estrutura
+            for idx_el, elem in enumerate(self.elementos):
+                id1 = self.no_para_id[elem.p1]
+                id2 = self.no_para_id[elem.p2]
+                
+                c = np.cos(elem.theta)
+                s = np.sin(elem.theta)
+                
+                if isinstance(elem, Portico):
+                    # Extrai os deslocamentos globais do elemento (6 GDLs)
+                    ux1, uy1, theta1 = u_frame[3*id1 : 3*id1+3]
+                    ux2, uy2, theta2 = u_frame[3*id2 : 3*id2+3]
+                    
+                    # Rotaciona para o sistema local do elemento
+                    u_local = np.array([
+                        ux1*c + uy1*s,  -ux1*s + uy1*c,  theta1,
+                        ux2*c + uy2*s,  -ux2*s + uy2*c,  theta2
+                    ])
+                    
+                    K_local = elem.k_matriz
+                    # Esforços locais: f_local = K_local @ u_local
+                    f_local = K_local @ u_local
+                    N1, M1 = f_local[0], f_local[2]
+                    N2, M2 = f_local[3], f_local[5]
+                    
+                    # Tensão nas fibras externas de ambas as extremidades
+                    sigma1 = (abs(N1) / elem.A) + (abs(M1) * elem.r_out / elem.I)
+                    sigma2 = (abs(N2) / elem.A) + (abs(M2) * elem.r_out / elem.I)
+                    
+                    # Von Mises máximo do elemento neste frame
+                    historico_vm[idx_el, idx_t] = max(sigma1, sigma2)
+                    
+                elif isinstance(elem, Trelica):
+                    ux1, uy1 = u_frame[3*id1], u_frame[3*id1+1]
+                    ux2, uy2 = u_frame[3*id2], u_frame[3*id2+1]
+                    
+                    # Deformação axial delta_L
+                    dl = (ux2 - ux1) * c + (uy2 - uy1) * s
+                    sigma_axial = (elem.E * dl) / elem.L
+                    historico_vm[idx_el, idx_t] = abs(sigma_axial)
+
+        # 5. Identifica os 3 elementos com os maiores picos históricos
+        picos_historicos = np.max(historico_vm, axis=1)
+        # Pega os índices dos 3 maiores valores ordenados
+        indices_top3 = np.argsort(picos_historicos)[-3:][::-1]
+        
+        print("\n--- ELEMENTOS MAIS SOLICITADOS (TOP 3 VON MISES) ---")
+        for ranking, idx in enumerate(indices_top3):
+            tipo = "Pórtico" if isinstance(self.elementos[idx], Portico) else "Treliça"
+            print(f"{ranking+1}º Lugar -> {tipo} ID {self.elementos[idx].id} | Pico: {picos_historicos[idx]/1e6:.2f} MPa")
+            
+        # 6. Plotagem do gráfico comparativo do Top 3
+        plt.figure(figsize=(11, 5.5))
+        cores = ["crimson", "darkviolet", "forestgreen"]
+        
+        for i, idx in enumerate(indices_top3):
+            elem = self.elementos[idx]
+            tipo = "Pórtico" if isinstance(elem, Portico) else "Treliça"
+            # Converte Pa para MPa no gráfico
+            plt.plot(tempo_amostrado, historico_vm[idx, :] / 1e6, 
+                    color=cores[i], linewidth=1.8, label=f"{tipo} ID {elem.id}")
+            
+        plt.title("Evolução Temporal da Tensão de Von Mises - Top 3 Elementos Críticos", fontsize=12, fontweight="bold")
+        plt.xlabel("Tempo (s)")
+        plt.ylabel("Tensão de Von Mises (MPa)")
+        plt.grid(True, linestyle=":", alpha=0.6)
+        plt.legend(loc="upper right")
+        salvar_grafico(plt, pasta_dados, "top3_von_mises_historico.png")
+      
+
 def main():
     estrutura = Estrutura()
-    #estrutura.plot_estrutura()
+    estrutura.plot_estrutura()
     print(estrutura.seis_frequencias_hz)
     estrutura.plotar_modos_vibracao(fator_escala=3)
-    estrutura.simular_newmark(dt=0.01, t_max=3*60.0)
-    gerar_gif_animado(estrutura, pasta_dados=results_dir, fator_escala=40, skip_frames=2)
-
+    fps_alvo = 5  # 5 frames por segundo de vídeo
+    dt_video = 1.0 / fps_alvo  # Cada frame do GIF deve representar 0.2s reais
+    dts = [0.1, 0.05, 0.01, 0.005]
+    for dt in dts:
+        skip_dinamico = max(1, int(np.round(dt_video / dt)))
+        estrutura.simular_newmark(dt=dt, t_max=5*60.0)
+        gerar_gif_animado(estrutura, pasta_dados=results_dir, append=f"_dt{dt:.3f}", fator_escala=40, skip_frames=skip_dinamico)
+        estrutura.plotar_movimento_no(no_alvo=(6.0, 7.5), pasta_dados=results_dir, append=f"_dt{dt:.3f}")
+        estrutura.plotar_top3_von_mises(pasta_dados=results_dir, skip_steps=1, append=f"_dt{dt:.3f}")
 if __name__ == "__main__":    
     main()

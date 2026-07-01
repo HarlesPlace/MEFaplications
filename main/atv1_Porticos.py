@@ -5,7 +5,7 @@ import os
 from scipy.linalg import eigh
 import matplotlib.animation as animation
 
-results_dir = "resultados"
+results_dir = "resultados3"
 
 def salvar_grafico(plt, nome_pasta, nome_arquivo):
     os.makedirs(nome_pasta, exist_ok=True)
@@ -21,19 +21,8 @@ def salvar_matriz(M, nome_pasta, nome_base="estrutura"):
     print(f"-> Matriz {nome_base} (.txt) salva em: {caminho_txt}")
 
 def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", append = "", fator_escala=30, skip_frames=2):
-    """
-    Lê os dados salvos do transiente, renderiza a torre a cada instante de tempo
-    e compila tudo num arquivo GIF animado com a força móvel sinalizada.
-    
-    Argumentos:
-        estrutura: Instância da classe Estrutura (para ler a geometria original).
-        pasta_dados (str): Pasta onde o arquivo 'dados_transiente.npz' está guardado.
-        fator_escala (float): Multiplicador visual para amplificar os deslocamentos.
-        skip_frames (int): Renderiza 1 quadro a cada X passos de tempo (otimização).
-    """
     caminho_npz = os.path.join(pasta_dados, "dados_transiente.npz")
     
-    # 1. Validação do arquivo de dados
     if not os.path.exists(caminho_npz):
         print(f"[Erro] Arquivo de dados não encontrado em: {caminho_npz}")
         print("Rode a simulação de Newmark primeiro para gerar o arquivo.")
@@ -44,31 +33,26 @@ def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", append = ""
     hist_tempo = dados['tempo']
     hist_u = dados['deslocamentos']
     
-    # Aplica a amostragem para reduzir o tamanho do GIF
     indices_frames = np.arange(0, len(hist_tempo), skip_frames)
     total_frames = len(indices_frames)
     print(f"-> Preparando animação com {total_frames} quadros (Skip={skip_frames}).")
 
-    # 2. Configuração inicial do Plot
     fig, ax = plt.subplots(figsize=(10, 9))
     ax.set_aspect('equal')
     ax.grid(True, linestyle=":", alpha=0.5)
     ax.set_xlabel("X (m)", fontsize=11)
     ax.set_ylabel("Y (m)", fontsize=11)
     
-    # Define limites fixos dos eixos para o gráfico não ficar pulando
     ax.set_xlim(-1.5, 7.5)
     ax.set_ylim(-1.5, 10.5)
     ax.set_xticks(np.arange(0, 6.1, 1.5))
     ax.set_yticks(np.arange(0, 9.1, 1.5))
 
-    # 3. Desenha a Estrutura Estática Não Deformada (Cinza ao fundo)
     for elem in estrutura.elementos:
         x_orig = [elem.p1[0], elem.p2[0]]
         y_orig = [elem.p1[1], elem.p2[1]]
         ax.plot(x_orig, y_orig, color="gainsboro", linestyle="--", linewidth=1.0)
 
-    # 4. Criação dos objetos gráficos vazios que serão atualizados no loop do GIF
     linhas_deformadas = []
     for elem in estrutura.elementos:
         if isinstance(elem, Portico):
@@ -77,59 +61,47 @@ def gerar_gif_animado(estrutura, pasta_dados="resultados_simulacao", append = ""
             line, = ax.plot([], [], color="darkorange", linewidth=1.2)
         linhas_deformadas.append((elem, line))
 
-    # Marcador dinâmico vermelho para indicar a posição da força móvel Fw
     ponto_forca, = ax.plot([], [], color="crimson", marker="v", markersize=10, label="Carga Móvel Fw")
     
-    # Título dinâmico que atualizará com o cronômetro do tempo
     titulo_dinamico = ax.text(0.5, 1.02, "", transform=ax.transAxes, 
                               ha="center", fontsize=12, fontweight="bold")
 
-    # Legendas estáticas organizadas
     leg_orig = mlines.Line2D([], [], color="gainsboro", linestyle="--", label="Não Deformada")
     leg_port = mlines.Line2D([], [], color="royalblue", linewidth=2.5, label="Pórtico")
     leg_trel = mlines.Line2D([], [], color="darkorange", linewidth=1.2, label="Treliça")
     leg_f_mov = mlines.Line2D([], [], color="crimson", marker="v", linestyle="None", markersize=8, label="Força Móvel")
     ax.legend(handles=[leg_orig, leg_port, leg_trel, leg_f_mov], loc="upper right")
 
-    # 5. Função de Atualização de Quadro (Frame por Frame)
     def update(frame_idx):
         t = hist_tempo[frame_idx]
         u_frame = hist_u[:, frame_idx]
         
-        # Atualiza a geometria deformada de cada elemento
         for elem, line in linhas_deformadas:
             id1 = estrutura.no_para_id[elem.p1]
             id2 = estrutura.no_para_id[elem.p2]
             
-            # Extrai deslocamentos nodais (X e Y) do instante atual
             ux1, uy1 = u_frame[3*id1], u_frame[3*id1+1]
             ux2, uy2 = u_frame[3*id2], u_frame[3*id2+1]
             
-            # Aplica o fator de escala e soma à coordenada original
             x_def = [elem.p1[0] + fator_escala * ux1, elem.p2[0] + fator_escala * ux2]
             y_def = [elem.p1[1] + fator_escala * uy1, elem.p2[1] + fator_escala * uy2]
             
             line.set_data(x_def, y_def)
             
-        # Atualiza a posição visual da Carga Móvel (p_ref=(1.5, 7.5))
         x_forca = 1.5 + 2.25 * (1.0 - np.cos(2.0 * np.pi * estrutura.f * t))
         y_forca = 7.5
         ponto_forca.set_data([x_forca], [y_forca + 0.1]) # Leve offset vertical para não sobrepor a viga
         
-        # Atualiza o cronômetro do título
         titulo_dinamico.set_text(f"Resposta Dinâmica da Torre - Tempo: {t:.2f} s\n(Deslocamentos amplificados {fator_escala}x)")
         
-        # Coleta todas as linhas modificadas para otimização de blitting
         return [line for _, line in linhas_deformadas] + [ponto_forca, titulo_dinamico]
 
-    # 6. Geração do Objeto de Animação
     print("-> Renderizando quadros e compilando o GIF (isso pode levar alguns instantes)...")
     ani = animation.FuncAnimation(
         fig, update, frames=indices_frames, 
         interval=50, blit=True
     )
 
-    # 7. Gravação física do arquivo no HD usando o motor Pillow
     caminho_gif = os.path.join(pasta_dados, f"animacao_simulacao{append}.gif")
     ani.save(caminho_gif, writer='pillow', fps=20)
     
@@ -276,6 +248,8 @@ class Estrutura():
         self.alfa = None
         self.beta = None
         self.C_global = self.montar_matriz_amortecimento()
+        self.hist_u = None
+        self.hist_R = None 
     
     def build(self):
         self.elementos.append(Portico((0.0, 0.0), (0.0, 1.5), 1))
@@ -529,21 +503,16 @@ class Estrutura():
         return F_q
 
     def calcular_vetor_forca_movel(self, t, p_ref):
-        """
-        Calcula a posição global da força a partir de um ponto de referência p_ref=(x_ref, y_ref)
-        e distribui a força pontual Fw nos nós do pórtico correspondente usando as funções
-        de forma Hermitianas do MEF de maneira generalizada.
-        """
         num_gdl = 3 * len(self.nos)
         F_movel = np.zeros(num_gdl)
         
         x_ref, y_ref = p_ref
         
-        # 1. Calcula a coordenada X global da força no instante t
+        # Calcula a coordenada X global da força no instante t
         x_global = x_ref + 2.25 * (1.0 - np.cos(2.0 * np.pi * self.f * t))
         y_global = y_ref
         
-        # 2. Encontra qual elemento contém essa coordenada espacial (x_global, y_global)
+        # Encontra qual elemento contém essa coordenada espacial (x_global, y_global)
         elem_atual = None
         for elem in self.elementos:
             # Verifica se o elemento está no mesmo nível Y de referência
@@ -555,12 +524,11 @@ class Estrutura():
                     break
                     
         if elem_atual is None:
-            return F_movel # Salvaguarda caso a força saia da estrutura
+            return F_movel #caso a força saia da estrutura
             
         L = elem_atual.L
         
-        # 3. Calcula a distância local 'd' a partir do Nó 1 (p1) do elemento
-        # Isso garante robustez caso a barra tenha sido definida da direita para a esquerda
+        # Calcula a distância local 'd' a partir do Nó 1
         if elem_atual.p2[0] >= elem_atual.p1[0]:
             d = x_global - elem_atual.p1[0]
         else:
@@ -568,21 +536,20 @@ class Estrutura():
             
         xi = d / L # Coordenada normalizada local (varia de 0 a 1)
         
-        # 4. Funções de Forma de Hermite Padronizadas (Viga de Euler-Bernoulli)
+        # Funções de Forma de Hermite 
         N1 = 1.0 - 3.0 * (xi**2) + 2.0 * (xi**3)        # Translação nó 1
         N2 = L * xi * ((1.0 - xi)**2)                   # Rotação nó 1
         N3 = 3.0 * (xi**2) - 2.0 * (xi**3)              # Translação nó 2
         N4 = L * (xi**2) * (xi - 1.0)                   # Rotação nó 2
         
-        # 5. Montagem do vetor de carga local do elemento (6x1)
-        # Força Fw atua para baixo (-Y local), gerando forças cortantes e momentos fletores
+        # Montagem do vetor de carga local do elemento (6x1)
         f_local = np.zeros(6)
         f_local[1] = -self.Fw * N1  # Esforço cortante no Nó 1
         f_local[2] = -self.Fw * N2  # Momento fletor no Nó 1
         f_local[4] = -self.Fw * N3  # Esforço cortante no Nó 2
         f_local[5] = -self.Fw * N4  # Momento fletor no Nó 2
         
-        # 6. Rotação do vetor para o sistema Global (T^T @ f_local)
+        # Rotação do vetor para o sistema Global 
         c = np.cos(elem_atual.theta)
         s = np.sin(elem_atual.theta)
         
@@ -596,7 +563,7 @@ class Estrutura():
         ])
         f_global_elem = T.T @ f_local
         
-        # 7. Assembly no vetor de forças da estrutura
+        # Assembly no vetor de forças da estrutura
         id1 = self.no_para_id[elem_atual.p1]
         id2 = self.no_para_id[elem_atual.p2]
         gdl = [3*id1, 3*id1+1, 3*id1+2, 3*id2, 3*id2+1, 3*id2+2]
@@ -607,21 +574,13 @@ class Estrutura():
         return F_movel
 
     def montar_matriz_amortecimento(self):
-        """
-        Calcula os coeficientes alfa e beta de Rayleigh e monta as matrizes
-        C_global e C_restrito utilizando as frequências do 1º e 6º modo.
-        """
-        # 1. Recupera as frequências em Hz obtidas na análise modal
+       
         f1 = self.seis_frequencias_hz[0]
         f6 = self.seis_frequencias_hz[5]
-        
-        # 2. CONVERSÃO CRUCIAL: Hz para rad/s
         omega1 = 2.0 * np.pi * f1
         omega6 = 2.0 * np.pi * f6
-        
-        xi = 0.06 # Fator de amortecimento de 6%
-        
-        # 3. Cálculo dos coeficientes pelas fórmulas do enunciado
+
+        xi = 0.06 # Fator de amortecimento
         self.alfa = (2.0 * xi * omega1 * omega6) / (omega1 + omega6)
         self.beta = (2.0 * xi) / (omega1 + omega6)
         
@@ -631,19 +590,14 @@ class Estrutura():
         print(f"Coeficiente Alfa (Massa)  [α]: {self.alfa:.6f}")
         print(f"Coeficiente Beta (Rigidez) [β]: {self.beta:.6e}")
         
-        # 4. Construção da Matriz Global de Amortecimento (54x54)
+        # Construção da Matriz Global de Amortecimento
         C = self.alfa * self.M_global + self.beta * self.K_global
         return C
 
     def simular_newmark(self, dt=0.1, t_max=60.0):
-        """
-        Executa a integração temporal de Newmark-Beta baseada na formulação de aceleração.
-        Salva os históricos completos em arquivos na pasta de resultados para pós-processamento.
-        """
         beta = 0.25
         gamma = 0.5
         
-        # --- 1. CONFIGURAÇÃO DOS GRAUS DE LIBERDADE ---
         id_no_base1 = self.no_para_id[(0.0, 0.0)]
         id_no_base2 = self.no_para_id[(1.5, 0.0)]
         gdls_fixos = [
@@ -653,7 +607,6 @@ class Estrutura():
         num_gdl_total = len(self.nos) * 3
         gdls_livres = [i for i in range(num_gdl_total) if i not in gdls_fixos]
         
-        # --- 2. EXTRAÇÃO DAS MATRIZES RESTRITAS (48 x 48) ---
         K_res = np.delete(self.K_global, gdls_fixos, axis=0)
         K_res = np.delete(K_res, gdls_fixos, axis=1)
         
@@ -663,33 +616,31 @@ class Estrutura():
         C_res = np.delete(self.C_global, gdls_fixos, axis=0)
         C_res = np.delete(C_res, gdls_fixos, axis=1)
         
-        # --- 3. MATRIZ DE MASSA EQUIVALENTE (M_CHAPEU) ---
+        # MATRIZ DE MASSA EQUIVALENTE (M_CHAPEU) 
         M_hat = M_res + dt * gamma * C_res + (dt**2) * beta * K_res
         
-        # --- 4. VETORES DE CARREGAMENTO ESTÁTICO FIXO (54 x 1) ---
+        # CARREGAMENTO ESTÁTICO 
         F_estatico_total = self.F_estatico + self.F_q  
         
-        # --- 5. CRIAÇÃO DOS VETORES DE TEMPO E MATRIZES DE HISTÓRICO ---
+        #  VETORES DE TEMPO E MATRIZES DE HISTÓRICO 
         self.hist_tempo = np.arange(0, t_max + dt, dt)
         num_passos = len(self.hist_tempo)
         
         self.hist_u = np.zeros((num_gdl_total, num_passos))
         self.hist_R = np.zeros((6, num_passos))
         
-        # --- 6. CONDIÇÕES INICIAIS CORRIGIDAS (t = 0) ---
-        d = np.zeros(len(gdls_livres))  # Deslocamento inicial livre
-        v = np.zeros(len(gdls_livres))  # Velocidade inicial livre
+        # CONDIÇÕES INICIAIS 
+        d = np.zeros(len(gdls_livres))  
+        v = np.zeros(len(gdls_livres)) 
         
         F_global_0 = F_estatico_total + self.calcular_vetor_forca_movel(0.0, p_ref=(1.5, 7.5))
         F_res_0 = np.delete(F_global_0, gdls_fixos)
         
-        # Aceleração inicial nos nós livres (48x1)
+        # Aceleração inicial nos nós livres 
         a = np.linalg.solve(M_res, F_res_0 - C_res @ v - K_res @ d)
         
-        # Guarda o deslocamento inicial (zeros) no histórico global
         self.hist_u[gdls_livres, 0] = d
         
-        # Cálculo exato das reações de apoio em t=0 (R0 = M*a0 - F0)
         a_global_0 = np.zeros(num_gdl_total)
         a_global_0[gdls_livres] = a
         R_0 = (self.M_global @ a_global_0) - F_global_0
@@ -699,7 +650,6 @@ class Estrutura():
         print(f" INICIANDO INTEGRAÇÃO TEMPORAL DE NEWMARK ({num_passos} passos)")
         print("=======================================================")
         
-        # --- 7. LOOP DA MARCHA NO TEMPO ---
         for n in range(1, num_passos):
             t_next = self.hist_tempo[n]
             
@@ -709,17 +659,14 @@ class Estrutura():
             preditor_C = v + dt * (1.0 - gamma) * a
             preditor_K = d + dt * v + ((dt**2) / 2.0) * (1.0 - 2.0 * beta) * a
             
-            # Montagem do {F_CHAPEU}
+            # Montagem do F_CHAPEU
             F_hat = F_res_next - C_res @ preditor_C - K_res @ preditor_K
             
-            # Solução do sistema linear para aceleração n+1
             a_next = np.linalg.solve(M_hat, F_hat)
             
-            # Correção de velocidade e deslocamento
             v_next = v + dt * (1.0 - gamma) * a + dt * gamma * a_next
             d_next = d + dt * v + ((dt**2) / 2.0) * (1.0 - 2.0 * beta) * a + (dt**2) * beta * a_next
             
-            # Reconstrução global para armazenamento (54 GDLs)
             u_global = np.zeros(num_gdl_total)
             v_global = np.zeros(num_gdl_total)
             a_global = np.zeros(num_gdl_total)
@@ -730,26 +677,23 @@ class Estrutura():
             
             self.hist_u[:, n] = u_global
             
-            # Reações de apoio na base
             R_total = (self.K_global @ u_global) + (self.C_global @ v_global) + (self.M_global @ a_global) - F_global_next
             self.hist_R[:, n] = R_total[gdls_fixos]
             
-            # Atualização do passado
             d = d_next
             v = v_next
             a = a_next
             
-            # Print de acompanhamento a cada 5 segundos virtuais simulados
             if np.isclose(t_next % 5.0, 0.0, atol=dt/2):
                 percentual = (t_next / t_max) * 100
                 print(f"-> Tempo: {t_next:5.2f} s / {t_max:.1f} s | Concluído: {percentual:6.2f}% | Config: Estável")
                 
         print("\n Simulação Concluída com sucesso!")
         
-        # --- 8. ROTINA DE SALVAMENTO DE DADOS PARA PÓS-PROCESSAMENTO ---
+        # SALVAMENTO DE DADOS 
         os.makedirs(results_dir, exist_ok=True)
         
-        # Opção A: Binário Compactado (.npz) -> Perfeito para carregar no script do GIF
+        # Binário Compactado .npz
         caminho_npz = os.path.join(results_dir, "dados_transiente.npz")
         np.savez_compressed(
             caminho_npz, 
@@ -759,8 +703,7 @@ class Estrutura():
         )
         print(f"-> [OK] Arquivo binário compactado salvo em: {caminho_npz}")
         
-        # Opção B: Arquivo de Texto (.txt) -> Para verificação humana ou importar no Excel
-        # Salvamos transposto (.T) para que cada LINHA represente um passo de tempo
+        # Arquivo de Texto (.txt) 
         caminho_txt = os.path.join(results_dir, "historico_deslocamentos.txt")
         np.savetxt(
             caminho_txt, 
@@ -772,25 +715,21 @@ class Estrutura():
         print(f"-> [OK] Arquivo de texto legível salvo em: {caminho_txt}")
 
     def plotar_movimento_no(self, no_alvo=(1.5, 9.0), pasta_dados=results_dir, append=""):
-        """
-        Carrega os dados salvos e plota o histórico de deslocamento X e Y de um nó específico.
-        """
-        # 1. Carrega os dados salvos pelo Newmark
+      
+        # Carrega os dados salvos pelo Newmark
         caminho_npz = os.path.join(pasta_dados, "dados_transiente.npz")
         dados = np.load(caminho_npz)
         tempo = dados['tempo']
         hist_u = dados['deslocamentos']
         
-        # 2. Encontra os GDLs do nó alvo
         id_no = self.no_para_id[no_alvo]
         gdl_x = 3 * id_no
         gdl_y = 3 * id_no + 1
         
-        # 3. Extrai as linhas de deslocamento (convertendo m para mm)
+        # Extrai as linhas de deslocamento 
         u_x = hist_u[gdl_x, :] * 1000
         u_y = hist_u[gdl_y, :] * 1000
         
-        # 4. Plotagem
         plt.figure(figsize=(10, 5))
         plt.plot(tempo, u_x, color="royalblue", linewidth=1.5, label="Deslocamento X (Horizontal)")
         plt.plot(tempo, u_y, color="darkorange", linewidth=1.5, label="Deslocamento Y (Vertical)")
@@ -803,10 +742,7 @@ class Estrutura():
         salvar_grafico(plt, pasta_dados, f"movimento_no_{no_alvo[0]}_{no_alvo[1]}{append}.png")
     
     def plotar_top3_von_mises(self, pasta_dados="resultados_simulacao", skip_steps=5, append=""):
-        """
-        Calcula a história de tensões de Von Mises para todos os elementos,
-        identifica os 3 elementos com maiores picos históricos e plota suas evoluções.
-        """
+
         caminho_npz = os.path.join(pasta_dados, "dados_transiente.npz")
         dados = np.load(caminho_npz)
         tempo = dados['tempo']
@@ -816,14 +752,12 @@ class Estrutura():
         num_elementos = len(self.elementos)
         
         # Matriz para guardar o histórico de Von Mises de cada elemento
-        # Guardaremos apenas os passos amostrados para economizar memória RAM
         passos_amostrados = np.arange(0, num_passos, skip_steps)
         tempo_amostrado = tempo[passos_amostrados]
         historico_vm = np.zeros((num_elementos, len(passos_amostrados)))
         
         print("-> Calculando tensões de Von Mises ao longo do tempo...")
         
-        # Loop temporal amostrado
         for idx_t, passo in enumerate(passos_amostrados):
             u_frame = hist_u[:, passo]
             
@@ -847,7 +781,6 @@ class Estrutura():
                     ])
                     
                     K_local = elem.k_matriz
-                    # Esforços locais: f_local = K_local @ u_local
                     f_local = K_local @ u_local
                     N1, M1 = f_local[0], f_local[2]
                     N2, M2 = f_local[3], f_local[5]
@@ -868,7 +801,7 @@ class Estrutura():
                     sigma_axial = (elem.E * dl) / elem.L
                     historico_vm[idx_el, idx_t] = abs(sigma_axial)
 
-        # 5. Identifica os 3 elementos com os maiores picos históricos
+        # Identifica os 3 elementos com os maiores picos históricos
         picos_historicos = np.max(historico_vm, axis=1)
         # Pega os índices dos 3 maiores valores ordenados
         indices_top3 = np.argsort(picos_historicos)[-3:][::-1]
@@ -878,14 +811,12 @@ class Estrutura():
             tipo = "Pórtico" if isinstance(self.elementos[idx], Portico) else "Treliça"
             print(f"{ranking+1}º Lugar -> {tipo} ID {self.elementos[idx].id} | Pico: {picos_historicos[idx]/1e6:.2f} MPa")
             
-        # 6. Plotagem do gráfico comparativo do Top 3
         plt.figure(figsize=(11, 5.5))
         cores = ["crimson", "darkviolet", "forestgreen"]
         
         for i, idx in enumerate(indices_top3):
             elem = self.elementos[idx]
             tipo = "Pórtico" if isinstance(elem, Portico) else "Treliça"
-            # Converte Pa para MPa no gráfico
             plt.plot(tempo_amostrado, historico_vm[idx, :] / 1e6, 
                     color=cores[i], linewidth=1.8, label=f"{tipo} ID {elem.id}")
             
@@ -895,15 +826,98 @@ class Estrutura():
         plt.grid(True, linestyle=":", alpha=0.6)
         plt.legend(loc="upper right")
         salvar_grafico(plt, pasta_dados, "top3_von_mises_historico.png")
-      
+
+    def resposta_em_frequencia(self, f_min=0.1, f_max=50.0, num_freq=200, freqs_naturais=None, no_alvo=(6.0, 7.5)):
+        
+        frequencias = np.linspace(f_min, f_max, num_freq)
+        amplitudes_maximas_x = []
+        amplitudes_maximas_y = []
+        
+        if no_alvo not in self.no_para_id:
+            raise ValueError(f"O nó {no_alvo} não foi encontrado no mapeamento 'no_para_id'.")
+            
+        id_no = self.no_para_id[no_alvo]
+        gdl_x = 3 * id_no
+        gdl_y = 3 * id_no + 1
+        
+        print("\n" + "="*60)
+        print(f" INICIANDO VARREDURA DE FREQUÊNCIA ({num_freq} pontos)")
+        print("="*60)
+        
+        for i, freq in enumerate(frequencias):
+            self.f = freq  # Atualiza o parâmetro f na classe
+            
+            # Newmark para a frequência atual
+            self.simular_newmark(dt=0.001, t_max=2.0)
+            
+            # Extrai o histórico de deslocamentos do ponto A
+            u_x = self.hist_u[gdl_x, :]
+            u_y = self.hist_u[gdl_y, :]
+            
+            # Captura a amplitude máxima absoluta em cada direção 
+            amp_max_x = np.max(np.abs(u_x))
+            amp_max_y = np.max(np.abs(u_y))
+            
+            # Captura a amplitude máxima observada
+            amplitudes_maximas_x.append(amp_max_x)
+            amplitudes_maximas_y.append(amp_max_y)
+            
+            if (i + 1) % 10 == 0 or i == 0:
+                percentual = ((i + 1) / num_freq) * 100
+                print(f"-> Varredura: {percentual:6.2f}% concluída | Freq Atual: {freq:6.2f} Hz")
+        
+        # Converter para array e passar para milímetros
+        amplitudes_maximas_x = np.array(amplitudes_maximas_x) * 1000  
+        amplitudes_maximas_y = np.array(amplitudes_maximas_y) * 1000
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+        
+        ax1.plot(frequencias, amplitudes_maximas_x, color="royalblue", linewidth=2.0, label="Resposta em X")
+        ax1.set_ylabel("Deslocamento Máximo X (mm)", fontsize=11)
+        ax1.grid(True, linestyle=":", alpha=0.6)
+        ax1.set_title(f"Diagrama de Resposta em Frequência - Ponto A {no_alvo}", fontsize=13, fontweight="bold")
+        
+        ax2.plot(frequencias, amplitudes_maximas_y, color="darkorange", linewidth=2.0, label="Resposta em Y")
+        ax2.set_xlabel("Frequência de Excitação $f$ (Hz)", fontsize=11)
+        ax2.set_ylabel("Deslocamento Máximo Y (mm)", fontsize=11)
+        ax2.grid(True, linestyle=":", alpha=0.6)
+    
+        if freqs_naturais is not None:
+            for ax, amps_atuais in zip([ax1, ax2], [amplitudes_maximas_x, amplitudes_maximas_y]):
+                y_lim_max = max(amps_atuais) if len(amps_atuais) > 0 else 1.0
+                
+                for idx, f_n in enumerate(freqs_naturais[:3]):
+                    ax.axvline(x=f_n, color="dimgray", linestyle="--", alpha=0.7, 
+                               label=f"$f_{idx+1}$ Natural: {f_n:.2f} Hz" if idx == 0 else "")
+                    
+                    ax.text(f_n, y_lim_max * 0.80, f" $f_{idx+1}$ = {f_n:.2f} Hz", 
+                            rotation=90, color="dimgray", fontsize=9, fontweight="bold",
+                            verticalalignment='top', horizontalalignment='left')
+        
+        ax1.legend(loc="upper right", fontsize=10)
+        ax2.legend(loc="upper right", fontsize=10)
+        
+        plt.tight_layout()
+        
+        try:
+            caminho_grafico = os.path.join(results_dir, f"frf_subplots_A_{no_alvo[0]}_{no_alvo[1]}.png")
+            plt.savefig(caminho_grafico, dpi=300, bbox_inches='tight')
+            print(f"\n-> [OK] Gráfico comparativo (Subplots) salvo em: {caminho_grafico}")
+        except NameError:
+            plt.savefig(f"frf_subplots_A.png", dpi=300, bbox_inches='tight')
+            print(f"\n-> [OK] Gráfico salvo no diretório atual como 'frf_subplots_A.png'")
+            
+        plt.show()
+        
+        return frequencias, (amplitudes_maximas_x, amplitudes_maximas_y)
 
 def main():
     estrutura = Estrutura()
     estrutura.plot_estrutura()
     print(estrutura.seis_frequencias_hz)
     estrutura.plotar_modos_vibracao(fator_escala=3)
-    fps_alvo = 5  # 5 frames por segundo de vídeo
-    dt_video = 1.0 / fps_alvo  # Cada frame do GIF deve representar 0.2s reais
+    fps_alvo = 5  
+    dt_video = 1.0 / fps_alvo  
     dts = [0.1, 0.05, 0.01, 0.005]
     for dt in dts:
         skip_dinamico = max(1, int(np.round(dt_video / dt)))
@@ -911,5 +925,6 @@ def main():
         gerar_gif_animado(estrutura, pasta_dados=results_dir, append=f"_dt{dt:.3f}", fator_escala=40, skip_frames=skip_dinamico)
         estrutura.plotar_movimento_no(no_alvo=(6.0, 7.5), pasta_dados=results_dir, append=f"_dt{dt:.3f}")
         estrutura.plotar_top3_von_mises(pasta_dados=results_dir, skip_steps=1, append=f"_dt{dt:.3f}")
+    estrutura.resposta_em_frequencia(f_min=1/60, f_max=50.0, num_freq=1000, freqs_naturais=estrutura.seis_frequencias_hz, no_alvo=(6.0, 7.5))
 if __name__ == "__main__":    
     main()
